@@ -4,6 +4,38 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>威软FFmpeg - 在线视频音频处理工具</title>
+  <!-- COI Service Worker: must be registered FIRST to enable SharedArrayBuffer for FFmpeg.wasm -->
+  <script>
+  (function () {
+    // If already cross-origin isolated, no action needed
+    if (window.crossOriginIsolated) return;
+    // file:// protocol doesn't support service workers
+    if (location.protocol === 'file:') return;
+    if (!('serviceWorker' in navigator)) return;
+
+    navigator.serviceWorker.register('./coi-serviceworker.js').then(function (reg) {
+      function doReload() {
+        // Reload once to pick up the new COOP/COEP headers; guard against loop
+        if (!sessionStorage.getItem('_coi_reload')) {
+          sessionStorage.setItem('_coi_reload', '1');
+          location.reload();
+        }
+      }
+      if (reg.active) {
+        doReload();
+      } else {
+        var sw = reg.installing || reg.waiting;
+        if (sw) {
+          sw.addEventListener('statechange', function (e) {
+            if (e.target.state === 'activated') doReload();
+          });
+        }
+      }
+    }).catch(function (e) {
+      console.warn('[威软FFmpeg] COI ServiceWorker 注册失败:', e);
+    });
+  }());
+  </script>
   <link rel="stylesheet" href="css/style.css" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>" />
 </head>

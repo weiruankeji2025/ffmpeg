@@ -10,6 +10,16 @@
 // GLOBALS
 // ================================================================
 
+// Guard: CDN scripts must load before app.js runs
+if (typeof FFmpegWASM === 'undefined' || typeof FFmpegUtil === 'undefined') {
+  document.addEventListener('DOMContentLoaded', () => {
+    const box = document.getElementById('logBox');
+    if (box) box.innerHTML =
+      '<div class="log-err">❌ FFmpeg 库文件加载失败（网络错误或 CDN 不可用）。请检查网络连接后刷新页面。</div>';
+  });
+  throw new Error('FFmpegWASM / FFmpegUtil not loaded');
+}
+
 const { FFmpeg } = FFmpegWASM;
 const { fetchFile, toBlobURL } = FFmpegUtil;
 
@@ -316,22 +326,40 @@ window.fillUrlExample = fillUrlExample;
 // ================================================================
 
 async function loadFFmpeg() {
-  showLoadingOverlay('正在加载 FFmpeg.wasm 引擎…');
+  // Pre-flight check: SharedArrayBuffer must be available
+  if (typeof SharedArrayBuffer === 'undefined') {
+    hideLoadingOverlay();
+    if (location.protocol === 'file:') {
+      showEnvError(
+        'file:// 协议不支持 SharedArrayBuffer',
+        '请通过本地 HTTP 服务器打开此页面，例如：<br>' +
+        '<code>npx serve .</code> 或 <code>python3 -m http.server 8080</code><br>' +
+        '然后访问 <code>http://localhost:8080</code>'
+      );
+    } else {
+      showEnvError(
+        '当前环境不支持 SharedArrayBuffer',
+        '页面正在尝试通过 Service Worker 启用隔离模式，请稍等片刻后手动刷新页面。<br>' +
+        '如问题持续，请确认使用 Chrome/Edge 最新版本。'
+      );
+    }
+    return;
+  }
+
+  showLoadingOverlay('正在加载 FFmpeg.wasm 引擎（约 30MB，请稍候）…');
   try {
     ffmpeg = new FFmpeg();
 
-    // Log callback
     ffmpeg.on('log', ({ type, message }) => {
-      const cls = type === 'stderr' ? '' : 'log-info';
-      appendLog(message, cls);
+      appendLog(message, type === 'stderr' ? '' : 'log-info');
     });
 
-    // Progress callback
-    ffmpeg.on('progress', ({ progress, time }) => {
+    ffmpeg.on('progress', ({ progress }) => {
       const pct = Math.min(100, Math.round(progress * 100));
       setProgress(pct, `处理中… ${pct}%`);
     });
 
+    log('正在从 CDN 加载 FFmpeg.wasm 核心文件…', 'info');
     const coreURL = await toBlobURL(
       `${window.FFMPEG_CORE_CDN}/ffmpeg-core.js`,
       'text/javascript'
@@ -341,17 +369,19 @@ async function loadFFmpeg() {
       'application/wasm'
     );
 
+    log('核心文件下载完成，正在初始化 WASM…', 'info');
     await ffmpeg.load({ coreURL, wasmURL });
 
     isLoaded = true;
     hideLoadingOverlay();
+    setProgress(0, '就绪');
     log('FFmpeg.wasm 引擎加载成功 ✓', 'info');
-    toast('FFmpeg 引擎就绪', 'success');
+    toast('FFmpeg 引擎就绪，请上传文件', 'success');
   } catch (err) {
     hideLoadingOverlay();
     log(`引擎加载失败：${err.message}`, 'err');
-    log('提示：某些浏览器需要启用 SharedArrayBuffer。请尝试 Chrome/Edge 最新版，或检查网站是否启用了 COOP/COEP 响应头。', 'warn');
-    toast('FFmpeg 加载失败，请查看日志', 'error');
+    log('请检查网络连接，或尝试刷新页面重试。', 'warn');
+    showEnvError('FFmpeg 引擎加载失败', err.message + '<br>请检查网络，然后刷新页面重试。');
     isLoaded = false;
   }
 }
@@ -371,23 +401,20 @@ function initRunButtons() {
 
 async function handleAction(action) {
   if (!isLoaded) {
-    toast('FFmpeg 引擎尚未加载完毕，请稍候', 'error');
+    toast('FFmpeg 引擎尚未就绪，请稍候再试', 'error');
     return;
   }
   if (isProcessing) {
     toast('当前有任务正在处理中，请等待完成', 'error');
     return;
   }
-  if (action !== 'probe' && action !== 'custom' && !inputFile) {
-    toast('请先上传文件', 'error');
+  // All actions except 'custom' require a primary file
+  if (action !== 'custom' && !inputFile) {
+    toast('请先上传或获取文件', 'error');
     return;
   }
   if (action === 'merge' && !inputFile2) {
     toast('合并操作需要上传两个文件', 'error');
-    return;
-  }
-  if (!inputFile && action !== 'custom') {
-    toast('请先上传文件', 'error');
     return;
   }
 
@@ -776,36 +803,30 @@ async function runWatermark() {
 
 // --- PROBE ---
 async function runProbe() {
-  if (!inputFile) {
-    toast('请先上传文件', 'error');
-    return;
-  }
-
   const inputName = getInputName(inputFile);
   log(`读取媒体信息：${inputFile.name}`, 'info');
   await writeInputFile(inputFile, inputName);
 
   setProgress(5, '读取中…');
 
-  // FFmpeg stderr has media info; capture it
+  // Collect log lines during this exec only; use a separate listener
   const logs = [];
-  const unsubscribe = ffmpeg.on('log', ({ message }) => {
-    logs.push(message);
-  });
+  const onLog = ({ message }) => logs.push(message);
+  ffmpeg.on('log', onLog);
 
   try {
-    // -hide_banner shows less noise but still shows streams
     await ffmpeg.exec(['-hide_banner', '-i', inputName]);
   } catch (e) {
-    // FFmpeg always exits non-zero when only -i is provided (no output), that's expected
+    // Expected: FFmpeg exits non-zero with no output file
+  } finally {
+    ffmpeg.off('log', onLog);  // always unsubscribe to avoid leak
   }
 
   setProgress(100, '读取完成');
 
-  const result = logs.join('\n');
   const probeEl = $('probeResult');
   probeEl.classList.remove('hidden');
-  probeEl.textContent = result || '未能读取媒体信息';
+  probeEl.textContent = logs.join('\n') || '未能读取媒体信息';
 
   await cleanupFiles([inputName]);
 }
@@ -949,6 +970,17 @@ function parseArgs(str) {
 // ================================================================
 // UI HELPERS
 // ================================================================
+
+function showEnvError(title, detail) {
+  // Replace loading overlay content (or show inline in log area) with an actionable error
+  const box = $('logBox');
+  const el = document.createElement('div');
+  el.className = 'log-err';
+  el.innerHTML = `<strong>⚠️ ${title}</strong><br>${detail}`;
+  box.appendChild(el);
+  box.scrollTop = box.scrollHeight;
+  setProgress(0, title);
+}
 
 function setProgress(pct, label) {
   $('progressBar').style.width = `${pct}%`;

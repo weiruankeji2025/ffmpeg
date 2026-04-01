@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>威软FFmpeg - 在线视频音频处理工具</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>" />
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="header-inner">
+      <div class="logo">
+        <span class="logo-icon">🎬</span>
+        <span class="logo-text">威软<strong>FFmpeg</strong></span>
+      </div>
+      <div class="header-desc">基于 WebAssembly 的在线多媒体处理工具 · 文件本地处理，隐私安全</div>
+      <div class="header-badges">
+        <span class="badge badge-green">本地运行</span>
+        <span class="badge badge-blue">无需上传</span>
+        <span class="badge badge-purple">隐私安全</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="app-container">
+    <!-- Sidebar Navigation -->
+    <nav class="sidebar">
+      <div class="sidebar-section-label">文件操作</div>
+      <button class="nav-btn active" data-tab="convert">
+        <span class="nav-icon">🔄</span>格式转换
+      </button>
+      <button class="nav-btn" data-tab="compress">
+        <span class="nav-icon">📦</span>视频压缩
+      </button>
+      <button class="nav-btn" data-tab="trim">
+        <span class="nav-icon">✂️</span>视频裁剪
+      </button>
+      <button class="nav-btn" data-tab="extract">
+        <span class="nav-icon">🎵</span>提取音频
+      </button>
+      <button class="nav-btn" data-tab="resize">
+        <span class="nav-icon">↔️</span>调整尺寸
+      </button>
+      <button class="nav-btn" data-tab="merge">
+        <span class="nav-icon">🔗</span>视频合并
+      </button>
+      <button class="nav-btn" data-tab="gif">
+        <span class="nav-icon">🖼️</span>转为GIF
+      </button>
+      <button class="nav-btn" data-tab="watermark">
+        <span class="nav-icon">💧</span>添加水印
+      </button>
+      <div class="sidebar-section-label">工具</div>
+      <button class="nav-btn" data-tab="probe">
+        <span class="nav-icon">🔍</span>媒体信息
+      </button>
+      <button class="nav-btn" data-tab="custom">
+        <span class="nav-icon">⌨️</span>自定义命令
+      </button>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- Upload Zone (shared) -->
+      <div class="upload-zone" id="uploadZone">
+        <div class="upload-inner" id="uploadInner">
+          <div class="upload-icon">📂</div>
+          <div class="upload-text">拖拽文件到此处，或 <span class="upload-link" id="uploadLink">点击选择文件</span></div>
+          <div class="upload-hint">支持视频、音频、图片等多媒体格式</div>
+          <input type="file" id="fileInput" accept="video/*,audio/*,image/*" multiple hidden />
+        </div>
+        <!-- File Preview -->
+        <div class="file-preview hidden" id="filePreview">
+          <div class="file-info">
+            <div class="file-thumb" id="fileThumb">🎬</div>
+            <div class="file-details">
+              <div class="file-name" id="fileName">-</div>
+              <div class="file-meta" id="fileMeta">-</div>
+            </div>
+            <button class="btn btn-sm btn-outline" id="changeFileBtn">更换文件</button>
+          </div>
+          <!-- Second file slot for merge -->
+          <div class="file-info hidden" id="file2Row">
+            <div class="file-thumb" id="file2Thumb">🎬</div>
+            <div class="file-details">
+              <div class="file-name" id="file2Name">-</div>
+              <div class="file-meta" id="file2Meta">-</div>
+            </div>
+            <button class="btn btn-sm btn-outline" id="changeFile2Btn">更换文件2</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab Panels -->
+      <div class="tab-panels">
+
+        <!-- FORMAT CONVERT -->
+        <div class="tab-panel active" id="tab-convert">
+          <h2 class="panel-title">🔄 格式转换</h2>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>输出格式</label>
+              <select id="convertFormat">
+                <optgroup label="视频格式">
+                  <option value="mp4">MP4 (H.264)</option>
+                  <option value="mp4-h265">MP4 (H.265/HEVC)</option>
+                  <option value="webm">WebM (VP9)</option>
+                  <option value="avi">AVI</option>
+                  <option value="mov">MOV</option>
+                  <option value="mkv">MKV</option>
+                  <option value="flv">FLV</option>
+                  <option value="ts">TS</option>
+                  <option value="wmv">WMV</option>
+                </optgroup>
+                <optgroup label="音频格式">
+                  <option value="mp3">MP3</option>
+                  <option value="aac">AAC</option>
+                  <option value="wav">WAV</option>
+                  <option value="flac">FLAC</option>
+                  <option value="ogg">OGG</option>
+                  <option value="m4a">M4A</option>
+                  <option value="opus">OPUS</option>
+                </optgroup>
+                <optgroup label="图片格式">
+                  <option value="gif">GIF（动图）</option>
+                  <option value="png">PNG（首帧截图）</option>
+                  <option value="jpg">JPG（首帧截图）</option>
+                </optgroup>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>视频编码</label>
+              <select id="convertVcodec">
+                <option value="copy">复制（不重新编码）</option>
+                <option value="libx264">H.264 (libx264)</option>
+                <option value="libx265">H.265 (libx265)</option>
+                <option value="libvpx-vp9">VP9</option>
+                <option value="mpeg4">MPEG-4</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>音频编码</label>
+              <select id="convertAcodec">
+                <option value="copy">复制（不重新编码）</option>
+                <option value="aac">AAC</option>
+                <option value="libmp3lame">MP3</option>
+                <option value="flac">FLAC</option>
+                <option value="libvorbis">Vorbis</option>
+                <option value="pcm_s16le">PCM (WAV)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>视频质量 (CRF)</label>
+              <div class="range-row">
+                <input type="range" id="convertCrf" min="0" max="51" value="23" />
+                <span id="convertCrfVal">23</span>
+                <span class="hint">0=无损，51=最低质量</span>
+              </div>
+            </div>
+          </div>
+          <button class="btn btn-primary run-btn" data-action="convert">开始转换</button>
+        </div>
+
+        <!-- COMPRESS -->
+        <div class="tab-panel" id="tab-compress">
+          <h2 class="panel-title">📦 视频压缩</h2>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>压缩预设</label>
+              <select id="compressPreset">
+                <option value="ultrafast">极速 (文件较大)</option>
+                <option value="fast">快速</option>
+                <option value="medium" selected>均衡</option>
+                <option value="slow">慢速 (文件较小)</option>
+                <option value="veryslow">极慢 (文件最小)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>视频质量 (CRF)</label>
+              <div class="range-row">
+                <input type="range" id="compressCrf" min="18" max="35" value="26" />
+                <span id="compressCrfVal">26</span>
+                <span class="hint">18=高质量，35=高压缩</span>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>分辨率缩放</label>
+              <select id="compressScale">
+                <option value="">保持原始分辨率</option>
+                <option value="1920:-2">1080p (1920×-)</option>
+                <option value="1280:-2">720p (1280×-)</option>
+                <option value="854:-2">480p (854×-)</option>
+                <option value="640:-2">360p (640×-)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>输出格式</label>
+              <select id="compressFormat">
+                <option value="mp4">MP4</option>
+                <option value="webm">WebM</option>
+                <option value="mkv">MKV</option>
+              </select>
+            </div>
+          </div>
+          <button class="btn btn-primary run-btn" data-action="compress">开始压缩</button>
+        </div>
+
+        <!-- TRIM -->
+        <div class="tab-panel" id="tab-trim">
+          <h2 class="panel-title">✂️ 视频裁剪</h2>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>开始时间</label>
+              <div class="time-input-row">
+                <input type="number" id="trimStartH" min="0" max="99" value="0" placeholder="时" />
+                <span>:</span>
+                <input type="number" id="trimStartM" min="0" max="59" value="0" placeholder="分" />
+                <span>:</span>
+                <input type="number" id="trimStartS" min="0" max="59" value="0" placeholder="秒" />
+              </div>
+            </div>
+            <div class="form-group">
+              <label>结束时间</label>
+              <div class="time-input-row">
+                <input type="number" id="trimEndH" min="0" max="99" value="0" placeholder="时" />
+                <span>:</span>
+                <input type="number" id="trimEndM" min="0" max="59" value="1" placeholder="分" />
+                <span>:</span>
+                <input type="number" id="trimEndS" min="0" max="59" value="0" placeholder="秒" />
+              </div>
+            </div>
+            <div class="form-group">
+              <label>输出格式</label>
+              <select id="trimFormat">
+                <option value="mp4">MP4</option>
+                <option value="webm">WebM</option>
+                <option value="mkv">MKV</option>
+                <option value="avi">AVI</option>
+                <option value="mov">MOV</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>编码方式</label>
+              <select id="trimCodec">
+                <option value="copy">快速剪切（复制流，秒级完成）</option>
+                <option value="reencode">重新编码（精准剪切）</option>
+              </select>
+            </div>
+          </div>
+          <button class="btn btn-primary run-btn" data-action="trim">开始裁剪</button>
+        </div>
+
+        <!-- EXTRACT AUDIO -->
+        <div class="tab-panel" id="tab-extract">
+          <h2 class="panel-title">🎵 提取音频</h2>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>音频格式</label>
+              <select id="extractFormat">
+                <option value="mp3">MP3</option>
+                <option value="aac">AAC</option>
+                <option value="wav">WAV</option>
+                <option value="flac">FLAC</option>
+                <option value="ogg">OGG</option>
+                <option value="m4a">M4A</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>音频码率</label>
+              <select id="extractBitrate">
+                <option value="320k">320 kbps（最高质量）</option>
+                <option value="192k" selected>192 kbps（高质量）</option>
+                <option value="128k">128 kbps（标准）</option>
+                <option value="96k">96 kbps（较小）</option>
+                <option value="64k">64 kbps（最小）</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>声道</label>
+              <select id="extractChannels">
+                <option value="">保持原始</option>
+                <option value="2">立体声 (2ch)</option>
+                <option value="1">单声道 (1ch)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>采样率</label>
+              <select id="extractSampleRate">
+                <option value="">保持原始</option>
+                <option value="44100">44100 Hz (标准)</option>
+                <option value="48000">48000 Hz (专业)</option>
+                <option value="22050">22050 Hz (较小)</option>
+              </select>
+            </div>
+          </div>
+          <button class="btn btn-primary run-btn" data-action="extract">提取音频</button>
+        </div>
+
+        <!-- RESIZE -->
+        <div class="tab-panel" id="tab-resize">
+          <h2 class="panel-title">↔️ 调整尺寸</h2>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>预设分辨率</label>
+              <select id="resizePreset" onchange="handleResizePreset(this.value)">
+                <option value="">自定义</option>
+                <option value="3840:2160">4K (3840×2160)</option>
+                <option value="1920:1080">1080p (1920×1080)</option>
+                <option value="1280:720">720p (1280×720)</option>
+                <option value="854:480">480p (854×480)</option>
+                <option value="640:360">360p (640×360)</option>
+                <option value="1080:1920">竖屏 1080×1920</option>
+                <option value="1080:1080">方形 1080×1080</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>宽度 (px，-2 表示自动)</label>
+              <input type="number" id="resizeWidth" value="1280" min="-2" />
+            </div>
+            <div class="form-group">
+              <label>高度 (px，-2 表示自动)</label>
+              <input type="number" id="resizeHeight" value="-2" min="-2" />
+            </div>
+            <div class="form-group">
+              <label>输出格式</label>
+              <select id="resizeFormat">
+                <option value="mp4">MP4</option>
+                <option value="webm">WebM</option>
+                <option value="mkv">MKV</option>
+              </select>
+            </div>
+          </div>
+          <button class="btn btn-primary run-btn" data-action="resize">调整尺寸</button>
+        </div>
+
+        <!-- MERGE -->
+        <div class="tab-panel" id="tab-merge">
+          <h2 class="panel-title">🔗 视频合并</h2>
+          <div class="info-box">
+            <strong>注意：</strong>请先在上方上传第一个视频，然后点击"选择第二个文件"上传第二个视频。两个视频建议使用相同分辨率和编码格式以获得最佳效果。
+          </div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>输出格式</label>
+              <select id="mergeFormat">
+                <option value="mp4">MP4</option>
+                <option value="mkv">MKV</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>编码方式</label>
+              <select id="mergeCodec">
+                <option value="copy">快速合并（复制流）</option>
+                <option value="reencode">重新编码（兼容性更好）</option>
+              </select>
+            </div>
+          </div>
+          <button class="btn btn-primary run-btn" data-action="merge">合并视频</button>
+        </div>
+
+        <!-- GIF -->
+        <div class="tab-panel" id="tab-gif">
+          <h2 class="panel-title">🖼️ 转为 GIF</h2>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>开始时间 (秒)</label>
+              <input type="number" id="gifStart" value="0" min="0" step="0.1" />
+            </div>
+            <div class="form-group">
+              <label>持续时长 (秒)</label>
+              <input type="number" id="gifDuration" value="5" min="0.1" max="30" step="0.1" />
+            </div>
+            <div class="form-group">
+              <label>帧率 (fps)</label>
+              <select id="gifFps">
+                <option value="5">5 fps（文件最小）</option>
+                <option value="10" selected>10 fps（推荐）</option>
+                <option value="15">15 fps（流畅）</option>
+                <option value="24">24 fps（文件较大）</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>宽度 (px)</label>
+              <input type="number" id="gifWidth" value="480" min="64" max="1920" />
+            </div>
+          </div>
+          <button class="btn btn-primary run-btn" data-action="gif">生成 GIF</button>
+        </div>
+
+        <!-- WATERMARK -->
+        <div class="tab-panel" id="tab-watermark">
+          <h2 class="panel-title">💧 添加文字水印</h2>
+          <div class="form-grid">
+            <div class="form-group full-width">
+              <label>水印文字</label>
+              <input type="text" id="wmText" value="威软FFmpeg" placeholder="输入水印文字" />
+            </div>
+            <div class="form-group">
+              <label>水印位置</label>
+              <select id="wmPosition">
+                <option value="topleft">左上角</option>
+                <option value="topright">右上角</option>
+                <option value="bottomleft">左下角</option>
+                <option value="bottomright" selected>右下角</option>
+                <option value="center">居中</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>字体大小</label>
+              <input type="number" id="wmFontSize" value="32" min="10" max="200" />
+            </div>
+            <div class="form-group">
+              <label>字体颜色</label>
+              <input type="color" id="wmColor" value="#ffffff" />
+            </div>
+            <div class="form-group">
+              <label>透明度 (0-1)</label>
+              <div class="range-row">
+                <input type="range" id="wmAlpha" min="0" max="1" step="0.05" value="0.8" />
+                <span id="wmAlphaVal">0.8</span>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>输出格式</label>
+              <select id="wmFormat">
+                <option value="mp4">MP4</option>
+                <option value="mkv">MKV</option>
+              </select>
+            </div>
+          </div>
+          <button class="btn btn-primary run-btn" data-action="watermark">添加水印</button>
+        </div>
+
+        <!-- PROBE -->
+        <div class="tab-panel" id="tab-probe">
+          <h2 class="panel-title">🔍 媒体信息</h2>
+          <div class="info-box">上传文件后，点击下方按钮读取详细的媒体信息，包括编码、分辨率、码率、时长等。</div>
+          <button class="btn btn-primary run-btn" data-action="probe">读取媒体信息</button>
+          <div class="probe-result hidden" id="probeResult"></div>
+        </div>
+
+        <!-- CUSTOM -->
+        <div class="tab-panel" id="tab-custom">
+          <h2 class="panel-title">⌨️ 自定义 FFmpeg 命令</h2>
+          <div class="info-box">
+            <strong>高级用法：</strong>直接输入 FFmpeg 参数（不含 ffmpeg 命令本身）。<br/>
+            输入文件将自动映射为 <code>input</code>（不含扩展名），请根据实际文件类型使用，如 <code>input.mp4</code>。<br/>
+            示例：<code>-i input.mp4 -vf "hflip" output.mp4</code>
+          </div>
+          <div class="form-group">
+            <label>FFmpeg 参数</label>
+            <textarea id="customCmd" rows="4" placeholder="-i input.mp4 -vf &quot;hflip,vflip&quot; -c:a copy output.mp4"></textarea>
+          </div>
+          <div class="form-group">
+            <label>输出文件名</label>
+            <input type="text" id="customOutput" value="output.mp4" placeholder="output.mp4" />
+          </div>
+          <button class="btn btn-primary run-btn" data-action="custom">执行命令</button>
+        </div>
+
+      </div><!-- end tab-panels -->
+
+      <!-- Progress & Log Area -->
+      <div class="progress-area" id="progressArea">
+        <div class="progress-header">
+          <span id="progressLabel">准备就绪</span>
+          <span id="progressPct">0%</span>
+        </div>
+        <div class="progress-bar-wrap">
+          <div class="progress-bar" id="progressBar" style="width:0%"></div>
+        </div>
+        <div class="log-box" id="logBox"></div>
+      </div>
+
+      <!-- Download Area -->
+      <div class="download-area hidden" id="downloadArea">
+        <div class="download-inner">
+          <span class="download-icon">✅</span>
+          <div class="download-info">
+            <div class="download-title">处理完成！</div>
+            <div class="download-meta" id="downloadMeta">-</div>
+          </div>
+          <a class="btn btn-success" id="downloadBtn" href="#">⬇️ 下载文件</a>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div>威软FFmpeg &copy; 2024 · 基于 <a href="https://ffmpegwasm.netlify.app/" target="_blank">FFmpeg.wasm</a> · 所有文件在本地浏览器中处理，不上传至服务器</div>
+  </footer>
+
+  <!-- Load FFmpeg.wasm -->
+  <script>
+    // Polyfill for SharedArrayBuffer in non-isolated contexts
+    window.FFMPEG_CDN = 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.6/dist/umd/ffmpeg.js';
+    window.FFMPEG_CORE_CDN = 'https://unpkg.com/@ffmpeg/core@0.12.4/dist/umd';
+  </script>
+  <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.6/dist/umd/ffmpeg.js"></script>
+  <script src="https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/util.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

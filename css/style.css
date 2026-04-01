@@ -198,9 +198,134 @@ body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 36px 20px;
+  padding: 24px 20px 28px;
   text-align: center;
+  gap: 10px;
+}
+
+/* ---- SOURCE TABS ---- */
+.source-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 3px;
+  margin-bottom: 6px;
+}
+
+.source-tab {
+  flex: 1;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  padding: 6px 18px;
+  font-size: 0.85rem;
+  font-family: var(--font);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+.source-tab:hover { color: var(--text-primary); }
+.source-tab.active {
+  background: var(--bg-active);
+  color: var(--accent-blue);
+}
+
+/* ---- URL PANEL ---- */
+#localPanel { display: flex; flex-direction: column; align-items: center; gap: 8px; width: 100%; }
+
+#urlPanel {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  width: 100%;
+  max-width: 580px;
+}
+
+.url-input-row {
+  display: flex;
   gap: 8px;
+  width: 100%;
+}
+
+.url-input-row input[type="url"] {
+  flex: 1;
+  font-size: 0.88rem;
+  padding: 9px 12px;
+}
+
+.url-options {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  font-size: 0.83rem;
+  color: var(--text-secondary);
+  font-weight: normal;
+  text-transform: none;
+  letter-spacing: normal;
+  user-select: none;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent-blue);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.url-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+  text-align: left;
+}
+
+.url-examples {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.url-example-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.url-example-tag {
+  font-size: 0.75rem;
+  background: rgba(88,166,255,0.1);
+  border: 1px solid rgba(88,166,255,0.25);
+  color: var(--accent-blue);
+  border-radius: 20px;
+  padding: 2px 10px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.url-example-tag:hover { background: rgba(88,166,255,0.22); }
+
+/* ---- DOWNLOAD PROGRESS (in-upload) ---- */
+.url-download-progress {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.url-download-progress .progress-bar-wrap {
+  margin-bottom: 0;
 }
 
 .upload-icon { font-size: 2.5rem; line-height: 1; }

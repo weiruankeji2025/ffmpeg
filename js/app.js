@@ -421,6 +421,58 @@ function switchSource(mode) {
 }
 
 // ================================================================
+// WORKER 跨域修复
+// ================================================================
+
+/**
+ * @ffmpeg/ffmpeg 内部用 new Worker(cdnUrl) 启动代码分片 worker。
+ * 在 GitHub Pages 等跨域环境下浏览器会拒绝构造跨域 Worker。
+ * 解决：预先用 fetch() 拉取 worker 脚本（CORS 允许），
+ * 转为 same-origin blob URL，然后 patch window.Worker 构造器，
+ * 将所有跨域 Worker URL 重定向到 blob URL。
+ */
+async function patchCrossOriginWorker() {
+  const workerChunkUrls = [
+    'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.6/dist/umd/814.ffmpeg.js',
+    'https://unpkg.com/@ffmpeg/ffmpeg@0.12.6/dist/umd/814.ffmpeg.js',
+  ];
+
+  let blobURL = null;
+  for (const url of workerChunkUrls) {
+    try {
+      log(`预加载 Worker 分片（${new URL(url).hostname}）…`, 'info');
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const code = await resp.text();
+      blobURL = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
+      log('Worker 跨域已修复 ✓', 'info');
+      break;
+    } catch (e) {
+      log(`Worker 分片加载失败（${new URL(url).hostname}）：${e.message}，切换备用…`, 'warn');
+    }
+  }
+
+  if (!blobURL) {
+    log('警告：无法预载 Worker 分片，跨域 Worker 可能仍会失败', 'warn');
+    return;
+  }
+
+  // Patch：拦截所有跨域 Worker 构造，重定向到 blob URL
+  const OrigWorker = window.Worker;
+  window.Worker = function PatchedWorker(scriptURL, options) {
+    const src = (scriptURL instanceof URL ? scriptURL.href : String(scriptURL));
+    const isCrossOrigin = src.startsWith('http') &&
+      !src.startsWith(location.origin) &&
+      !src.startsWith('blob:');
+    if (isCrossOrigin) {
+      return new OrigWorker(blobURL, options);
+    }
+    return new OrigWorker(scriptURL, options);
+  };
+  window.Worker.prototype = OrigWorker.prototype;
+}
+
+// ================================================================
 // LOAD FFMPEG.WASM
 // ================================================================
 
@@ -449,6 +501,9 @@ async function loadFFmpeg() {
   try {
     // Step 1: 动态加载 JS 库（多 CDN 降级）
     await loadLibsWithFallback();
+
+    // Step 1.5: 修复跨域 Worker 问题（GitHub Pages 等环境）
+    await patchCrossOriginWorker();
 
     // Step 2: 初始化 FFmpeg 实例
     ffmpeg = new FFmpeg();

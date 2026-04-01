@@ -285,29 +285,86 @@ function initUrlDownload() {
       if (url) fetchFromUrl(url);
     }
   });
+
+  // 粘贴时自动提取 URL（兼容粘贴完整 ffmpeg 命令的情况）
+  on('urlInput', 'paste', (e) => {
+    setTimeout(() => {
+      const inp = $('urlInput');
+      if (!inp) return;
+      const extracted = extractUrlFromFfmpegCmd(inp.value);
+      if (extracted !== inp.value) {
+        inp.value = extracted;
+        inp.dispatchEvent(new Event('input'));
+      }
+    }, 0);
+  });
+}
+
+/**
+ * 如果用户粘贴的是完整 ffmpeg 命令（如 ffmpeg -i "url" ...），
+ * 自动提取 -i 参数后的 URL；否则原样返回。
+ */
+function extractUrlFromFfmpegCmd(input) {
+  input = input.trim();
+  // 匹配 -i "url" 或 -i 'url' 或 -i url（无引号）
+  const m = input.match(/(?:^|\s)-i\s+(?:"([^"]+)"|'([^']+)'|(\S+))/);
+  if (m) {
+    const extracted = m[1] || m[2] || m[3];
+    if (extracted && /^https?:\/\//i.test(extracted)) return extracted;
+  }
+  // 如果整个字符串不像 URL 但包含 http，尝试提取第一个 http URL
+  if (!/^https?:\/\//i.test(input)) {
+    const urlMatch = input.match(/https?:\/\/[^\s"']+/);
+    if (urlMatch) return urlMatch[0];
+  }
+  return input;
 }
 
 async function fetchFromUrl(rawUrl) {
-  const useCorsProxy = $('useCorsProxy').checked;
   const fetchBtn = $('fetchUrlBtn');
 
-  // Validate URL
-  let url;
+  // 自动从粘贴的 ffmpeg 命令中提取 URL（如 ffmpeg -i "url" ...）
+  rawUrl = extractUrlFromFfmpegCmd(rawUrl);
+
+  // 更新输入框显示提取结果
+  const inp = $('urlInput');
+  if (inp && inp.value.trim() !== rawUrl) inp.value = rawUrl;
+
+  // 校验 URL
+  let parsedUrl;
   try {
-    url = new URL(rawUrl);
-    if (!['http:', 'https:'].includes(url.protocol)) {
-      throw new Error('仅支持 HTTP/HTTPS 协议');
+    parsedUrl = new URL(rawUrl);
+    if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+      throw new Error('仅支持 HTTP / HTTPS 协议');
     }
   } catch (e) {
     toast(`无效的URL：${e.message}`, 'error');
+    log(`URL 解析失败：${e.message}`, 'err');
+    log('请确认输入的是完整的 HTTP/HTTPS 链接，例如：https://example.com/video.mp4', 'warn');
     return;
   }
 
+  // m3u8 / HLS 流：浏览器无法直接下载，需要用 FFmpeg 自定义命令处理
+  if (rawUrl.includes('.m3u8') || rawUrl.includes('m3u8')) {
+    clearLog();
+    log('检测到 HLS/m3u8 流地址 🎵', 'info');
+    log('浏览器无法直接下载 HLS 分片流，请使用「自定义命令」标签页：', 'warn');
+    log(`示例命令（切换到侧边栏「自定义命令」标签页后粘贴）：`, 'warn');
+    log(`-i "${rawUrl}" -c copy output.mp4`, 'info');
+    // 自动跳转到自定义命令 Tab 并填入命令
+    const customCmd = $('customCmd');
+    if (customCmd) customCmd.value = `-i "${rawUrl}" -c copy output.mp4`;
+    // 切换到 custom tab
+    document.querySelector('[data-tab="custom"]')?.click();
+    toast('已跳转到自定义命令，直接点击「执行命令」', 'info');
+    return;
+  }
+
+  const useCorsProxy = $('useCorsProxy').checked;
   const targetUrl = useCorsProxy
     ? `${CORS_PROXY}${encodeURIComponent(rawUrl)}`
     : rawUrl;
 
-  // Disable button, show spinner
   fetchBtn.disabled = true;
   fetchBtn.innerHTML = '<span class="spinner"></span> 下载中…';
 

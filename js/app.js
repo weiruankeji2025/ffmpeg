@@ -7,32 +7,86 @@
 'use strict';
 
 // ================================================================
-// GLOBALS
+// CDN 配置（多源自动降级：jsDelivr → unpkg）
 // ================================================================
 
-// Guard: CDN scripts must load before app.js runs
-if (typeof FFmpegWASM === 'undefined' || typeof FFmpegUtil === 'undefined') {
-  document.addEventListener('DOMContentLoaded', () => {
-    const box = document.getElementById('logBox');
-    if (box) box.innerHTML =
-      '<div class="log-err">❌ FFmpeg 库文件加载失败（网络错误或 CDN 不可用）。请检查网络连接后刷新页面。</div>';
-  });
-  throw new Error('FFmpegWASM / FFmpegUtil not loaded');
-}
+const CDN_LIBS = [
+  {
+    name: 'FFmpegWASM',
+    urls: [
+      'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.6/dist/umd/ffmpeg.js',
+      'https://unpkg.com/@ffmpeg/ffmpeg@0.12.6/dist/umd/ffmpeg.js',
+    ],
+  },
+  {
+    name: 'FFmpegUtil',
+    urls: [
+      'https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/util.js',
+      'https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/util.js',
+    ],
+  },
+];
 
-const { FFmpeg } = FFmpegWASM;
-const { fetchFile, toBlobURL } = FFmpegUtil;
+const CDN_CORE_LIST = [
+  'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.4/dist/umd',
+  'https://unpkg.com/@ffmpeg/core@0.12.4/dist/umd',
+];
 
+// ================================================================
+// GLOBALS（声明，实际赋值在库加载后）
+// ================================================================
+
+let FFmpeg, fetchFile, toBlobURL;
 let ffmpeg = null;
 let isLoaded = false;
 let isProcessing = false;
 
-// Uploaded files
-let inputFile = null;    // primary file
-let inputFile2 = null;   // secondary file (for merge)
+let inputFile = null;
+let inputFile2 = null;
 
-// DOM cache
 const $ = (id) => document.getElementById(id);
+
+// ================================================================
+// 动态加载脚本（带 CDN 降级）
+// ================================================================
+
+function loadScript(url) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = url;
+    s.crossOrigin = 'anonymous';
+    s.onload = resolve;
+    s.onerror = () => reject(new Error(`加载失败：${url}`));
+    document.head.appendChild(s);
+  });
+}
+
+async function loadLibsWithFallback() {
+  for (const lib of CDN_LIBS) {
+    if (typeof window[lib.name] !== 'undefined') continue; // 已加载
+    let lastErr;
+    for (const url of lib.urls) {
+      try {
+        log(`加载 ${lib.name}（${new URL(url).hostname}）…`, 'info');
+        await loadScript(url);
+        if (typeof window[lib.name] !== 'undefined') {
+          log(`${lib.name} 加载成功 ✓`, 'info');
+          break;
+        }
+      } catch (e) {
+        lastErr = e;
+        log(`CDN 不可用，切换备用源…`, 'warn');
+      }
+    }
+    if (typeof window[lib.name] === 'undefined') {
+      throw new Error(`所有 CDN 均无法加载 ${lib.name}：${lastErr?.message}`);
+    }
+  }
+  // 绑定到模块级变量
+  FFmpeg    = window.FFmpegWASM.FFmpeg;
+  fetchFile = window.FFmpegUtil.fetchFile;
+  toBlobURL = window.FFmpegUtil.toBlobURL;
+}
 
 // ================================================================
 // INIT
@@ -346,31 +400,37 @@ async function loadFFmpeg() {
     return;
   }
 
-  showLoadingOverlay('正在加载 FFmpeg.wasm 引擎（约 30MB，请稍候）…');
+  showLoadingOverlay('正在加载 FFmpeg 库文件…');
   try {
-    ffmpeg = new FFmpeg();
+    // Step 1: 动态加载 JS 库（多 CDN 降级）
+    await loadLibsWithFallback();
 
+    // Step 2: 初始化 FFmpeg 实例
+    ffmpeg = new FFmpeg();
     ffmpeg.on('log', ({ type, message }) => {
       appendLog(message, type === 'stderr' ? '' : 'log-info');
     });
-
     ffmpeg.on('progress', ({ progress }) => {
       const pct = Math.min(100, Math.round(progress * 100));
       setProgress(pct, `处理中… ${pct}%`);
     });
 
-    log('正在从 CDN 加载 FFmpeg.wasm 核心文件…', 'info');
-    const coreURL = await toBlobURL(
-      `${window.FFMPEG_CORE_CDN}/ffmpeg-core.js`,
-      'text/javascript'
-    );
-    const wasmURL = await toBlobURL(
-      `${window.FFMPEG_CORE_CDN}/ffmpeg-core.wasm`,
-      'application/wasm'
-    );
-
-    log('核心文件下载完成，正在初始化 WASM…', 'info');
-    await ffmpeg.load({ coreURL, wasmURL });
+    // Step 3: 加载 WASM 核心（多 CDN 降级）
+    let coreLoaded = false;
+    for (const cdn of CDN_CORE_LIST) {
+      try {
+        log(`加载核心 WASM（${new URL(cdn).hostname}，约 30MB）…`, 'info');
+        const coreURL = await toBlobURL(`${cdn}/ffmpeg-core.js`, 'text/javascript');
+        const wasmURL = await toBlobURL(`${cdn}/ffmpeg-core.wasm`, 'application/wasm');
+        log('WASM 下载完成，正在初始化…', 'info');
+        await ffmpeg.load({ coreURL, wasmURL });
+        coreLoaded = true;
+        break;
+      } catch (e) {
+        log(`核心加载失败（${cdn}）：${e.message}，切换备用源…`, 'warn');
+      }
+    }
+    if (!coreLoaded) throw new Error('所有 CDN 核心均加载失败，请检查网络后刷新重试');
 
     isLoaded = true;
     hideLoadingOverlay();
@@ -380,8 +440,11 @@ async function loadFFmpeg() {
   } catch (err) {
     hideLoadingOverlay();
     log(`引擎加载失败：${err.message}`, 'err');
-    log('请检查网络连接，或尝试刷新页面重试。', 'warn');
-    showEnvError('FFmpeg 引擎加载失败', err.message + '<br>请检查网络，然后刷新页面重试。');
+    showEnvError(
+      'FFmpeg 引擎加载失败',
+      err.message +
+      '<br>请检查网络连接后 <a href="javascript:location.reload()" style="color:var(--accent-blue)">刷新页面重试</a>。'
+    );
     isLoaded = false;
   }
 }

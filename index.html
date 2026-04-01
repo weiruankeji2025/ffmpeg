@@ -552,14 +552,7 @@
     <div>威软FFmpeg &copy; 2024 · 基于 <a href="https://ffmpegwasm.netlify.app/" target="_blank">FFmpeg.wasm</a> · 所有文件在本地浏览器中处理，不上传至服务器</div>
   </footer>
 
-  <!-- Load FFmpeg.wasm -->
-  <script>
-    // Polyfill for SharedArrayBuffer in non-isolated contexts
-    window.FFMPEG_CDN = 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.6/dist/umd/ffmpeg.js';
-    window.FFMPEG_CORE_CDN = 'https://unpkg.com/@ffmpeg/core@0.12.4/dist/umd';
-  </script>
-  <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.6/dist/umd/ffmpeg.js"></script>
-  <script src="https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/util.js"></script>
+  <!-- app.js 自行动态加载 FFmpeg 库，内置多 CDN 自动降级 -->
   <script src="js/app.js"></script>
 </body>
 </html>

@@ -215,26 +215,32 @@ function updateFilePreview(file, thumbId, nameId, metaId) {
 const CORS_PROXY = 'https://corsproxy.io/?';
 
 function initUrlDownload() {
+  function on(id, event, fn) {
+    const el = $(id);
+    if (el) el.addEventListener(event, fn);
+  }
+
   // Source tabs
-  $('tabLocal').addEventListener('click', () => switchSource('local'));
-  $('tabUrl').addEventListener('click',   () => switchSource('url'));
+  on('tabLocal', 'click', () => switchSource('local'));
+  on('tabUrl',   'click', () => switchSource('url'));
 
   // Example URL button
-  $('exampleUrlBtn').addEventListener('click', () => {
-    $('urlInput').value = 'https://www.w3schools.com/html/mov_bbb.mp4';
+  on('exampleUrlBtn', 'click', () => {
+    const inp = $('urlInput');
+    if (inp) inp.value = 'https://www.w3schools.com/html/mov_bbb.mp4';
     toast('已填入示例URL，点击"获取文件"下载', 'info');
   });
 
   // Fetch button
-  $('fetchUrlBtn').addEventListener('click', () => {
-    const url = $('urlInput').value.trim();
+  on('fetchUrlBtn', 'click', () => {
+    const url = ($('urlInput') || {}).value?.trim();
     if (!url) { toast('请输入文件URL', 'error'); return; }
     fetchFromUrl(url);
   });
 
-  $('urlInput').addEventListener('keydown', (e) => {
+  on('urlInput', 'keydown', (e) => {
     if (e.key === 'Enter') {
-      const url = $('urlInput').value.trim();
+      const url = ($('urlInput') || {}).value?.trim();
       if (url) fetchFromUrl(url);
     }
   });
@@ -1097,7 +1103,8 @@ function initRangeDisplays() {
   });
 
   // Resize preset select (was onchange in HTML)
-  $('resizePreset').addEventListener('change', function () { handleResizePreset(this.value); });
+  const resizePreset = $('resizePreset');
+  if (resizePreset) resizePreset.addEventListener('change', function () { handleResizePreset(this.value); });
 }
 
 function handleResizePreset(val) {

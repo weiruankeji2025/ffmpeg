@@ -31,6 +31,7 @@ const $ = (id) => document.getElementById(id);
 document.addEventListener('DOMContentLoaded', () => {
   initNavigation();
   initUpload();
+  initUrlDownload();
   initRunButtons();
   initRangeDisplays();
   loadFFmpeg();
@@ -141,6 +142,174 @@ function updateFilePreview(file, thumbId, nameId, metaId) {
   $(nameId).textContent = file.name;
   $(metaId).textContent = `${formatSize(file.size)} · ${file.type || '未知类型'} · 修改于 ${new Date(file.lastModified).toLocaleDateString()}`;
 }
+
+// ================================================================
+// URL DOWNLOAD
+// ================================================================
+
+// CORS proxy options (user can choose)
+const CORS_PROXY = 'https://corsproxy.io/?';
+
+function initUrlDownload() {
+  const btn = $('fetchUrlBtn');
+  const urlInput = $('urlInput');
+
+  btn.addEventListener('click', () => {
+    const url = urlInput.value.trim();
+    if (!url) { toast('请输入文件URL', 'error'); return; }
+    fetchFromUrl(url);
+  });
+
+  urlInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const url = urlInput.value.trim();
+      if (url) fetchFromUrl(url);
+    }
+  });
+}
+
+async function fetchFromUrl(rawUrl) {
+  const useCorsProxy = $('useCorsProxy').checked;
+  const fetchBtn = $('fetchUrlBtn');
+
+  // Validate URL
+  let url;
+  try {
+    url = new URL(rawUrl);
+    if (!['http:', 'https:'].includes(url.protocol)) {
+      throw new Error('仅支持 HTTP/HTTPS 协议');
+    }
+  } catch (e) {
+    toast(`无效的URL：${e.message}`, 'error');
+    return;
+  }
+
+  const targetUrl = useCorsProxy
+    ? `${CORS_PROXY}${encodeURIComponent(rawUrl)}`
+    : rawUrl;
+
+  // Disable button, show spinner
+  fetchBtn.disabled = true;
+  fetchBtn.innerHTML = '<span class="spinner"></span> 下载中…';
+
+  clearLog();
+  setProgress(0, '连接中…');
+  log(`下载地址：${rawUrl}`, 'info');
+  if (useCorsProxy) log(`通过 CORS 代理：${CORS_PROXY}`, 'warn');
+
+  try {
+    const response = await fetch(targetUrl);
+
+    if (!response.ok) {
+      throw new Error(`服务器返回 HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    // Detect filename from Content-Disposition or URL
+    let filename = guessFilename(rawUrl, response.headers.get('Content-Disposition'));
+    const contentType = response.headers.get('Content-Type') || 'application/octet-stream';
+
+    // Stream download with progress (if Content-Length is available)
+    const contentLength = response.headers.get('Content-Length');
+    const totalBytes = contentLength ? parseInt(contentLength) : 0;
+
+    log(`文件名：${filename}`, 'info');
+    if (totalBytes) log(`文件大小：${formatSize(totalBytes)}`, 'info');
+    else log('文件大小：未知（服务器未提供 Content-Length）', 'warn');
+
+    let receivedBytes = 0;
+    const chunks = [];
+
+    const reader = response.body.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      receivedBytes += value.length;
+      if (totalBytes > 0) {
+        const pct = Math.round((receivedBytes / totalBytes) * 90);
+        setProgress(pct, `下载中… ${formatSize(receivedBytes)} / ${formatSize(totalBytes)}`);
+      } else {
+        setProgress(50, `下载中… ${formatSize(receivedBytes)}`);
+      }
+    }
+
+    setProgress(95, '处理文件…');
+
+    // Merge chunks into Blob → File
+    const blob = new Blob(chunks, { type: contentType.split(';')[0] });
+    const file = new File([blob], filename, {
+      type: blob.type,
+      lastModified: Date.now()
+    });
+
+    setProgress(100, '下载完成');
+    log(`下载完成：${filename} (${formatSize(file.size)})`, 'info');
+
+    setFile(file);
+    toast(`文件已就绪：${filename}`, 'success');
+
+    // Switch back to file-preview mode
+    switchSource('local');  // keeps UI consistent
+
+  } catch (err) {
+    const isCors = err.message.includes('Failed to fetch')
+      || err.name === 'TypeError'
+      || err.message.toLowerCase().includes('cors');
+
+    if (isCors && !useCorsProxy) {
+      log(`跨域错误（CORS）：无法直接访问该URL。`, 'err');
+      log('解决方案：勾选"使用 CORS 代理"后重试。', 'warn');
+      toast('跨域受限，请勾选 CORS 代理后重试', 'error');
+    } else {
+      log(`下载失败：${err.message}`, 'err');
+      toast(`下载失败：${err.message}`, 'error');
+    }
+    setProgress(0, '下载失败');
+  }
+
+  fetchBtn.disabled = false;
+  fetchBtn.innerHTML = '⬇️ 获取文件';
+}
+
+function guessFilename(urlStr, contentDisposition) {
+  // Try Content-Disposition header first
+  if (contentDisposition) {
+    const match = contentDisposition.match(/filename[^;=\n]*=\s*(['"]?)([^'";\n]+)\1/i);
+    if (match && match[2]) return decodeURIComponent(match[2].trim());
+  }
+  // Fallback: extract from URL path
+  try {
+    const u = new URL(urlStr);
+    const parts = u.pathname.split('/').filter(Boolean);
+    const last = parts[parts.length - 1];
+    if (last && last.includes('.')) return decodeURIComponent(last);
+  } catch (e) { /* ignore */ }
+  return `download_${Date.now()}.mp4`;
+}
+
+function switchSource(mode) {
+  if (mode === 'local') {
+    $('tabLocal').classList.add('active');
+    $('tabUrl').classList.remove('active');
+    $('localPanel').classList.remove('hidden');
+    $('urlPanel').classList.add('hidden');
+  } else {
+    $('tabLocal').classList.remove('active');
+    $('tabUrl').classList.add('active');
+    $('localPanel').classList.add('hidden');
+    $('urlPanel').classList.remove('hidden');
+  }
+}
+
+function fillUrlExample(el) {
+  // Fill a demo public video URL (Big Buck Bunny short sample)
+  $('urlInput').value = 'https://www.w3schools.com/html/mov_bbb.mp4';
+  toast('已填入示例URL，点击"获取文件"下载', 'info');
+}
+
+// Expose for HTML inline handlers
+window.switchSource = switchSource;
+window.fillUrlExample = fillUrlExample;
 
 // ================================================================
 // LOAD FFMPEG.WASM

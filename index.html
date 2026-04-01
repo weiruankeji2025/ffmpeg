@@ -66,10 +66,36 @@
       <!-- Upload Zone (shared) -->
       <div class="upload-zone" id="uploadZone">
         <div class="upload-inner" id="uploadInner">
-          <div class="upload-icon">📂</div>
-          <div class="upload-text">拖拽文件到此处，或 <span class="upload-link" id="uploadLink">点击选择文件</span></div>
-          <div class="upload-hint">支持视频、音频、图片等多媒体格式</div>
-          <input type="file" id="fileInput" accept="video/*,audio/*,image/*" multiple hidden />
+          <!-- Source mode tabs -->
+          <div class="source-tabs">
+            <button class="source-tab active" id="tabLocal" onclick="switchSource('local')">📂 本地文件</button>
+            <button class="source-tab" id="tabUrl" onclick="switchSource('url')">🌐 在线URL</button>
+          </div>
+          <!-- Local file panel -->
+          <div id="localPanel">
+            <div class="upload-icon">📂</div>
+            <div class="upload-text">拖拽文件到此处，或 <span class="upload-link" id="uploadLink">点击选择文件</span></div>
+            <div class="upload-hint">支持视频、音频、图片等多媒体格式</div>
+            <input type="file" id="fileInput" accept="video/*,audio/*,image/*" multiple hidden />
+          </div>
+          <!-- URL panel -->
+          <div id="urlPanel" class="hidden">
+            <div class="url-input-row">
+              <input type="url" id="urlInput" placeholder="https://example.com/video.mp4" />
+              <button class="btn btn-primary" id="fetchUrlBtn">⬇️ 获取文件</button>
+            </div>
+            <div class="url-options">
+              <label class="checkbox-label">
+                <input type="checkbox" id="useCorsProxy" />
+                使用 CORS 代理（跨域资源请勾选此项）
+              </label>
+              <div class="url-hint">⚠️ 受浏览器同源策略限制，部分外部URL需启用 CORS 代理才能访问。</div>
+            </div>
+            <div class="url-examples">
+              <span class="url-example-label">示例：</span>
+              <span class="url-example-tag" onclick="fillUrlExample(this)">示例视频</span>
+            </div>
+          </div>
         </div>
         <!-- File Preview -->
         <div class="file-preview hidden" id="filePreview">

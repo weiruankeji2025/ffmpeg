@@ -479,52 +479,55 @@ async function runHlsDownload(m3u8Url) {
 
   // --- 3. 解析分片列表 ---
   const segments = parseSegments(playlistText, playlistUrl);
-  if (segments.length === 0) throw new Error('HLS 清单中未找到媒体分片（.ts）');
+  if (segments.length === 0) throw new Error('HLS 清单中未找到媒体分片');
   log(`共 ${segments.length} 个分片，开始下载…`, 'info');
 
   // --- 4. 逐片下载并写入 FFmpeg FS ---
   const localNames = [];
   let failed = 0;
   for (let i = 0; i < segments.length; i++) {
-    const segName = `_seg${String(i).padStart(5, '0')}.ts`;
-    localNames.push(segName);
+    // 使用纯字母数字文件名，避免 FFmpeg concat 路径解析问题
+    const segName = `hlsseg${String(i).padStart(5, '0')}.ts`;
     setProgress(Math.round((i / segments.length) * 75), `下载分片 ${i + 1} / ${segments.length}…`);
     try {
       const resp = await fetch(segments[i]);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = new Uint8Array(await resp.arrayBuffer());
       await ffmpeg.writeFile(segName, data);
+      localNames.push(segName);
     } catch (e) {
       log(`分片 ${i + 1} 失败（${e.message}），跳过`, 'warn');
       failed++;
-      localNames[localNames.length - 1] = null; // mark missing
     }
   }
 
-  const validNames = localNames.filter(Boolean);
-  if (validNames.length === 0) throw new Error('所有分片均下载失败，请检查链接是否有效或已过期');
-  if (failed > 0) log(`${failed} 个分片下载失败，将跳过`, 'warn');
+  if (localNames.length === 0) throw new Error('所有分片均下载失败，请检查链接是否有效或已过期');
+  if (failed > 0) log(`${failed} 个分片跳过，合并剩余 ${localNames.length} 片`, 'warn');
 
-  // --- 5. 生成本地 m3u8 清单 ---
-  const localM3u8 = [
-    '#EXTM3U', '#EXT-X-VERSION:3',
-    '#EXT-X-TARGETDURATION:10', '#EXT-X-MEDIA-SEQUENCE:0',
-    ...validNames.flatMap(n => [`#EXTINF:10.0,`, n]),
-    '#EXT-X-ENDLIST'
-  ].join('\n');
-  await ffmpeg.writeFile('_hls_local.m3u8', localM3u8);
+  // --- 5. 使用 concat demuxer（比 HLS demuxer 更可靠）---
+  // concat demuxer 直接拼接本地 .ts 文件，无路径解析问题
+  const concatList = localNames.map(n => `file '${n}'`).join('\n');
+  await ffmpeg.writeFile('hlsconcat.txt', concatList);
 
   // --- 6. FFmpeg 合并 ---
-  setProgress(80, 'FFmpeg 合并分片…');
-  log('正在合并…', 'info');
-  await ffmpeg.exec(['-i', '_hls_local.m3u8', '-c', 'copy', '-y', '_hls_out.mp4']);
+  setProgress(80, `FFmpeg 合并 ${localNames.length} 个分片…`);
+  log('正在合并（-f concat）…', 'info');
+  await ffmpeg.exec([
+    '-f', 'concat',
+    '-safe', '0',
+    '-i', 'hlsconcat.txt',
+    '-c', 'copy',
+    '-y', 'hlsout.mp4'
+  ]);
 
-  setProgress(100, '下载完成');
-  await downloadResult('_hls_out.mp4', `hls_${Date.now()}.mp4`);
+  setProgress(95, '生成下载链接…');
+  log('读取输出文件…', 'info');
+  await downloadResult('hlsout.mp4', `hls_${Date.now()}.mp4`);
+  setProgress(100, '完成');
   toast('HLS 下载完成！', 'success');
 
   // 清理 FS
-  await cleanupFiles(['_hls_local.m3u8', '_hls_out.mp4', ...validNames]);
+  await cleanupFiles(['hlsconcat.txt', 'hlsout.mp4', ...localNames]);
 }
 
 async function fetchText(url, label) {

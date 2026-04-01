@@ -62,30 +62,71 @@ function loadScript(url) {
 }
 
 async function loadLibsWithFallback() {
-  for (const lib of CDN_LIBS) {
-    if (typeof window[lib.name] !== 'undefined') continue; // 已加载
-    let lastErr;
-    for (const url of lib.urls) {
+  // --- 1. 加载 @ffmpeg/ffmpeg（必须，无法内置替代）---
+  if (typeof window.FFmpegWASM === 'undefined') {
+    let loaded = false;
+    for (const url of CDN_LIBS[0].urls) {
       try {
-        log(`加载 ${lib.name}（${new URL(url).hostname}）…`, 'info');
+        log(`加载 FFmpegWASM（${new URL(url).hostname}）…`, 'info');
         await loadScript(url);
-        if (typeof window[lib.name] !== 'undefined') {
-          log(`${lib.name} 加载成功 ✓`, 'info');
+        if (typeof window.FFmpegWASM !== 'undefined') {
+          log('FFmpegWASM 加载成功 ✓', 'info');
+          loaded = true;
           break;
         }
       } catch (e) {
-        lastErr = e;
-        log(`CDN 不可用，切换备用源…`, 'warn');
+        log('CDN 不可用，切换备用源…', 'warn');
       }
     }
-    if (typeof window[lib.name] === 'undefined') {
-      throw new Error(`所有 CDN 均无法加载 ${lib.name}：${lastErr?.message}`);
+    if (!loaded) throw new Error('所有 CDN 均无法加载 FFmpegWASM，请检查网络后刷新重试');
+  }
+  FFmpeg = window.FFmpegWASM.FFmpeg;
+
+  // --- 2. 加载 @ffmpeg/util（可选，CDN 失败时使用内置实现）---
+  if (typeof window.FFmpegUtil === 'undefined') {
+    let loaded = false;
+    for (const url of CDN_LIBS[1].urls) {
+      try {
+        log(`加载 FFmpegUtil（${new URL(url).hostname}）…`, 'info');
+        await loadScript(url);
+        if (typeof window.FFmpegUtil !== 'undefined') {
+          log('FFmpegUtil 加载成功 ✓', 'info');
+          loaded = true;
+          break;
+        }
+      } catch (e) {
+        log('FFmpegUtil CDN 不可用，切换备用源…', 'warn');
+      }
+    }
+    if (!loaded) {
+      log('FFmpegUtil 所有 CDN 不可用，启用内置实现 ✓', 'warn');
     }
   }
-  // 绑定到模块级变量
-  FFmpeg    = window.FFmpegWASM.FFmpeg;
-  fetchFile = window.FFmpegUtil.fetchFile;
-  toBlobURL = window.FFmpegUtil.toBlobURL;
+
+  if (typeof window.FFmpegUtil !== 'undefined') {
+    fetchFile = window.FFmpegUtil.fetchFile;
+    toBlobURL = window.FFmpegUtil.toBlobURL;
+  } else {
+    // 内置实现：功能等价于 @ffmpeg/util
+    fetchFile = async (input) => {
+      if (typeof input === 'string') {
+        const res = await fetch(input);
+        if (!res.ok) throw new Error(`fetchFile: HTTP ${res.status}`);
+        return new Uint8Array(await res.arrayBuffer());
+      }
+      // File / Blob / BufferSource
+      if (input instanceof Blob) return new Uint8Array(await input.arrayBuffer());
+      if (input instanceof ArrayBuffer) return new Uint8Array(input);
+      if (ArrayBuffer.isView(input)) return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+      throw new Error('fetchFile: 不支持的输入类型');
+    };
+    toBlobURL = async (url, mimeType) => {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`toBlobURL: HTTP ${res.status} ${url}`);
+      const blob = new Blob([await res.arrayBuffer()], { type: mimeType });
+      return URL.createObjectURL(blob);
+    };
+  }
 }
 
 // ================================================================

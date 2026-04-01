@@ -643,6 +643,7 @@ input[type="color"] {
 .log-box .log-err { color: var(--accent-red); }
 .log-box .log-info { color: var(--accent-blue); }
 .log-box .log-warn { color: var(--accent-yellow); }
+.log-box .log-err code { background: rgba(255,123,114,0.12); color: var(--accent-orange); padding: 1px 5px; border-radius: 3px; font-family: var(--font-mono); }
 
 /* ---- DOWNLOAD AREA ---- */
 .download-area {

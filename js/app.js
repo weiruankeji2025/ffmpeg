@@ -344,19 +344,17 @@ async function fetchFromUrl(rawUrl) {
     return;
   }
 
-  // m3u8 / HLS 流：浏览器无法直接下载，需要用 FFmpeg 自定义命令处理
-  if (rawUrl.includes('.m3u8') || rawUrl.includes('m3u8')) {
+  // m3u8 / HLS 流：FFmpeg.wasm 无 HTTPS 协议支持，需浏览器层逐片下载
+  if (/\.m3u8/i.test(rawUrl) || /[?&].*m3u8/i.test(rawUrl)) {
     clearLog();
-    log('检测到 HLS/m3u8 流地址 🎵', 'info');
-    log('浏览器无法直接下载 HLS 分片流，请使用「自定义命令」标签页：', 'warn');
-    log(`示例命令（切换到侧边栏「自定义命令」标签页后粘贴）：`, 'warn');
-    log(`-i "${rawUrl}" -c copy output.mp4`, 'info');
-    // 自动跳转到自定义命令 Tab 并填入命令
-    const customCmd = $('customCmd');
-    if (customCmd) customCmd.value = `-i "${rawUrl}" -c copy output.mp4`;
-    // 切换到 custom tab
-    document.querySelector('[data-tab="custom"]')?.click();
-    toast('已跳转到自定义命令，直接点击「执行命令」', 'info');
+    log('检测到 HLS/m3u8 流地址，启动浏览器层分片下载器…', 'info');
+    const fetchBtn2 = $('fetchUrlBtn');
+    if (fetchBtn2) { fetchBtn2.disabled = true; fetchBtn2.innerHTML = '<span class="spinner"></span> 下载中…'; }
+    try {
+      await runHlsDownload(rawUrl);
+    } finally {
+      if (fetchBtn2) { fetchBtn2.disabled = false; fetchBtn2.innerHTML = '⬇️ 获取文件'; }
+    }
     return;
   }
 
@@ -445,6 +443,124 @@ async function fetchFromUrl(rawUrl) {
 
   fetchBtn.disabled = false;
   fetchBtn.innerHTML = '⬇️ 获取文件';
+}
+
+// ================================================================
+// HLS / m3u8 下载器
+// FFmpeg.wasm 无法访问 https:// 协议，此函数在浏览器层
+// 下载所有 TS 分片并写入 FFmpeg 虚拟 FS，再由 FFmpeg 合并。
+// ================================================================
+
+async function runHlsDownload(m3u8Url) {
+  if (!isLoaded) {
+    toast('FFmpeg 引擎尚未就绪，请稍候', 'error');
+    return;
+  }
+
+  clearDownload();
+  setProgress(0, '获取 HLS 清单…');
+
+  // --- 1. 获取清单 ---
+  const manifestText = await fetchText(m3u8Url, 'HLS 清单');
+
+  // --- 2. 如果是 Master Playlist，选取最高带宽的流 ---
+  let playlistUrl = m3u8Url;
+  let playlistText = manifestText;
+
+  if (manifestText.includes('#EXT-X-STREAM-INF')) {
+    log('检测到 Master Playlist，选择最高清晰度…', 'info');
+    const variant = pickBestVariant(manifestText, m3u8Url);
+    if (variant) {
+      playlistUrl = variant;
+      playlistText = await fetchText(variant, '子清单');
+      log(`已选择：${variant}`, 'info');
+    }
+  }
+
+  // --- 3. 解析分片列表 ---
+  const segments = parseSegments(playlistText, playlistUrl);
+  if (segments.length === 0) throw new Error('HLS 清单中未找到媒体分片（.ts）');
+  log(`共 ${segments.length} 个分片，开始下载…`, 'info');
+
+  // --- 4. 逐片下载并写入 FFmpeg FS ---
+  const localNames = [];
+  let failed = 0;
+  for (let i = 0; i < segments.length; i++) {
+    const segName = `_seg${String(i).padStart(5, '0')}.ts`;
+    localNames.push(segName);
+    setProgress(Math.round((i / segments.length) * 75), `下载分片 ${i + 1} / ${segments.length}…`);
+    try {
+      const resp = await fetch(segments[i]);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = new Uint8Array(await resp.arrayBuffer());
+      await ffmpeg.writeFile(segName, data);
+    } catch (e) {
+      log(`分片 ${i + 1} 失败（${e.message}），跳过`, 'warn');
+      failed++;
+      localNames[localNames.length - 1] = null; // mark missing
+    }
+  }
+
+  const validNames = localNames.filter(Boolean);
+  if (validNames.length === 0) throw new Error('所有分片均下载失败，请检查链接是否有效或已过期');
+  if (failed > 0) log(`${failed} 个分片下载失败，将跳过`, 'warn');
+
+  // --- 5. 生成本地 m3u8 清单 ---
+  const localM3u8 = [
+    '#EXTM3U', '#EXT-X-VERSION:3',
+    '#EXT-X-TARGETDURATION:10', '#EXT-X-MEDIA-SEQUENCE:0',
+    ...validNames.flatMap(n => [`#EXTINF:10.0,`, n]),
+    '#EXT-X-ENDLIST'
+  ].join('\n');
+  await ffmpeg.writeFile('_hls_local.m3u8', localM3u8);
+
+  // --- 6. FFmpeg 合并 ---
+  setProgress(80, 'FFmpeg 合并分片…');
+  log('正在合并…', 'info');
+  await ffmpeg.exec(['-i', '_hls_local.m3u8', '-c', 'copy', '-y', '_hls_out.mp4']);
+
+  setProgress(100, '下载完成');
+  await downloadResult('_hls_out.mp4', `hls_${Date.now()}.mp4`);
+  toast('HLS 下载完成！', 'success');
+
+  // 清理 FS
+  await cleanupFiles(['_hls_local.m3u8', '_hls_out.mp4', ...validNames]);
+}
+
+async function fetchText(url, label) {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`${label}获取失败：HTTP ${resp.status}`);
+  return resp.text();
+}
+
+function resolveHlsUrl(base, relative) {
+  try { return new URL(relative, base).href; } catch { return relative; }
+}
+
+function parseSegments(text, baseUrl) {
+  return text.split('\n')
+    .map(l => l.trim())
+    .filter(l => l && !l.startsWith('#'))
+    .map(l => resolveHlsUrl(baseUrl, l));
+}
+
+function pickBestVariant(masterText, baseUrl) {
+  // 找 BANDWIDTH 最大的 #EXT-X-STREAM-INF 条目
+  const lines = masterText.split('\n');
+  let best = null, bestBw = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (line.startsWith('#EXT-X-STREAM-INF')) {
+      const bwMatch = line.match(/BANDWIDTH=(\d+)/i);
+      const bw = bwMatch ? parseInt(bwMatch[1]) : 0;
+      const uri = lines[i + 1]?.trim();
+      if (uri && !uri.startsWith('#') && bw > bestBw) {
+        bestBw = bw;
+        best = resolveHlsUrl(baseUrl, uri);
+      }
+    }
+  }
+  return best;
 }
 
 function guessFilename(urlStr, contentDisposition) {

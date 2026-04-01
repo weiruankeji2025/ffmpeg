@@ -215,18 +215,26 @@ function updateFilePreview(file, thumbId, nameId, metaId) {
 const CORS_PROXY = 'https://corsproxy.io/?';
 
 function initUrlDownload() {
-  const btn = $('fetchUrlBtn');
-  const urlInput = $('urlInput');
+  // Source tabs
+  $('tabLocal').addEventListener('click', () => switchSource('local'));
+  $('tabUrl').addEventListener('click',   () => switchSource('url'));
 
-  btn.addEventListener('click', () => {
-    const url = urlInput.value.trim();
+  // Example URL button
+  $('exampleUrlBtn').addEventListener('click', () => {
+    $('urlInput').value = 'https://www.w3schools.com/html/mov_bbb.mp4';
+    toast('已填入示例URL，点击"获取文件"下载', 'info');
+  });
+
+  // Fetch button
+  $('fetchUrlBtn').addEventListener('click', () => {
+    const url = $('urlInput').value.trim();
     if (!url) { toast('请输入文件URL', 'error'); return; }
     fetchFromUrl(url);
   });
 
-  urlInput.addEventListener('keydown', (e) => {
+  $('urlInput').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
-      const url = urlInput.value.trim();
+      const url = $('urlInput').value.trim();
       if (url) fetchFromUrl(url);
     }
   });
@@ -364,16 +372,6 @@ function switchSource(mode) {
     $('urlPanel').classList.remove('hidden');
   }
 }
-
-function fillUrlExample(el) {
-  // Fill a demo public video URL (Big Buck Bunny short sample)
-  $('urlInput').value = 'https://www.w3schools.com/html/mov_bbb.mp4';
-  toast('已填入示例URL，点击"获取文件"下载', 'info');
-}
-
-// Expose for HTML inline handlers
-window.switchSource = switchSource;
-window.fillUrlExample = fillUrlExample;
 
 // ================================================================
 // LOAD FFMPEG.WASM
@@ -1097,9 +1095,11 @@ function initRangeDisplays() {
       input.addEventListener('input', () => { display.textContent = input.value; });
     }
   });
+
+  // Resize preset select (was onchange in HTML)
+  $('resizePreset').addEventListener('change', function () { handleResizePreset(this.value); });
 }
 
-// Resize preset handler (called from HTML onchange)
 function handleResizePreset(val) {
   if (!val) return;
   const [w, h] = val.split(':');
@@ -1147,5 +1147,3 @@ function hideLoadingOverlay() {
   overlay = null;
 }
 
-// Expose for HTML inline handler
-window.handleResizePreset = handleResizePreset;

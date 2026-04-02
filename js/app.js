@@ -487,11 +487,11 @@ async function runHlsDownload(m3u8Url) {
   log(`共 ${segments.length} 个分片，开始下载…`, 'info');
 
   // --- 4. 逐片下载并写入 FFmpeg FS ---
+  // 使用绝对路径 /hlsseg00000.ts，确保 concat demuxer 和 writeFile 使用同一路径
   const localNames = [];
   let failed = 0;
   for (let i = 0; i < segments.length; i++) {
-    // 使用纯字母数字文件名，避免 FFmpeg concat 路径解析问题
-    const segName = `hlsseg${String(i).padStart(5, '0')}.ts`;
+    const segName = `/hlsseg${String(i).padStart(5, '0')}.ts`;
     setProgress(Math.round((i / segments.length) * 75), `下载分片 ${i + 1} / ${segments.length}…`);
     try {
       const resp = await fetch(segments[i]);
@@ -508,11 +508,10 @@ async function runHlsDownload(m3u8Url) {
   if (localNames.length === 0) throw new Error('所有分片均下载失败，请检查链接是否有效或已过期');
   if (failed > 0) log(`${failed} 个分片跳过，合并剩余 ${localNames.length} 片`, 'warn');
 
-  // --- 5. 使用 concat demuxer（比 HLS demuxer 更可靠）---
-  // concat demuxer 直接拼接本地 .ts 文件，无路径解析问题
+  // --- 5. 使用 concat demuxer（绝对路径，避免 CWD 不一致问题）---
+  // concat 文件和分片均使用 /绝对路径，消除 concat demuxer 路径解析歧义
   const concatList = localNames.map(n => `file '${n}'`).join('\n');
-  // 显式编码为 Uint8Array，避免 FFmpeg.wasm FS 写入字符串时的兼容性问题
-  await ffmpeg.writeFile('hlsconcat.txt', new TextEncoder().encode(concatList));
+  await ffmpeg.writeFile('/hlsconcat.txt', new TextEncoder().encode(concatList));
   log(`concat 列表已写入（${localNames.length} 行）`, 'info');
 
   // --- 6. FFmpeg 合并 ---
@@ -521,9 +520,9 @@ async function runHlsDownload(m3u8Url) {
   const exitCode = await ffmpeg.exec([
     '-f', 'concat',
     '-safe', '0',
-    '-i', 'hlsconcat.txt',
+    '-i', '/hlsconcat.txt',
     '-c', 'copy',
-    '-y', 'hlsout.mp4'
+    '-y', '/hlsout.mp4'
   ]);
 
   if (exitCode !== 0) {
@@ -532,12 +531,12 @@ async function runHlsDownload(m3u8Url) {
 
   setProgress(95, '生成下载链接…');
   log('读取输出文件…', 'info');
-  await downloadResult('hlsout.mp4', `hls_${Date.now()}.mp4`);
+  await downloadResult('/hlsout.mp4', `hls_${Date.now()}.mp4`);
   setProgress(100, '完成');
   toast('HLS 下载完成！', 'success');
 
   // 清理 FS
-  await cleanupFiles(['hlsconcat.txt', 'hlsout.mp4', ...localNames]);
+  await cleanupFiles(['/hlsconcat.txt', '/hlsout.mp4', ...localNames]);
 }
 
 async function fetchText(url, label) {

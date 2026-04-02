@@ -352,6 +352,10 @@ async function fetchFromUrl(rawUrl) {
     if (fetchBtn2) { fetchBtn2.disabled = true; fetchBtn2.innerHTML = '<span class="spinner"></span> 下载中…'; }
     try {
       await runHlsDownload(rawUrl);
+    } catch (hlsErr) {
+      log(`HLS 下载失败：${hlsErr.message}`, 'err');
+      toast(`HLS 下载失败：${hlsErr.message}`, 'error');
+      setProgress(0, '下载失败');
     } finally {
       if (fetchBtn2) { fetchBtn2.disabled = false; fetchBtn2.innerHTML = '⬇️ 获取文件'; }
     }
@@ -507,18 +511,24 @@ async function runHlsDownload(m3u8Url) {
   // --- 5. 使用 concat demuxer（比 HLS demuxer 更可靠）---
   // concat demuxer 直接拼接本地 .ts 文件，无路径解析问题
   const concatList = localNames.map(n => `file '${n}'`).join('\n');
-  await ffmpeg.writeFile('hlsconcat.txt', concatList);
+  // 显式编码为 Uint8Array，避免 FFmpeg.wasm FS 写入字符串时的兼容性问题
+  await ffmpeg.writeFile('hlsconcat.txt', new TextEncoder().encode(concatList));
+  log(`concat 列表已写入（${localNames.length} 行）`, 'info');
 
   // --- 6. FFmpeg 合并 ---
   setProgress(80, `FFmpeg 合并 ${localNames.length} 个分片…`);
   log('正在合并（-f concat）…', 'info');
-  await ffmpeg.exec([
+  const exitCode = await ffmpeg.exec([
     '-f', 'concat',
     '-safe', '0',
     '-i', 'hlsconcat.txt',
     '-c', 'copy',
     '-y', 'hlsout.mp4'
   ]);
+
+  if (exitCode !== 0) {
+    throw new Error(`FFmpeg 合并失败（退出码：${exitCode}）。请查看上方日志获取详情。`);
+  }
 
   setProgress(95, '生成下载链接…');
   log('读取输出文件…', 'info');

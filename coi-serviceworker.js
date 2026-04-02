@@ -21,7 +21,9 @@ async function handleFetch(request) {
   try {
     response = await fetch(request);
   } catch (e) {
-    throw e;
+    // Network failure (e.g. offline) — return a proper error response
+    // instead of re-throwing, which would crash the service worker.
+    return Response.error();
   }
 
   // Don't tamper with opaque (cross-origin no-cors) responses
@@ -45,4 +47,11 @@ async function handleFetch(request) {
   });
 }
 
-self.addEventListener('fetch', (e) => e.respondWith(handleFetch(e.request)));
+self.addEventListener('fetch', (e) => {
+  // Only intercept same-origin requests to inject isolation headers.
+  // Cross-origin requests (CDN scripts, WASM, etc.) are handled by the
+  // browser normally — intercepting them risks CORS failures in the SW.
+  const url = new URL(e.request.url);
+  if (url.origin !== self.location.origin) return;
+  e.respondWith(handleFetch(e.request));
+});

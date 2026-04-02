@@ -18,13 +18,7 @@ const CDN_LIBS = [
       'https://unpkg.com/@ffmpeg/ffmpeg@0.12.6/dist/umd/ffmpeg.js',
     ],
   },
-  {
-    name: 'FFmpegUtil',
-    urls: [
-      'https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/util.js',
-      'https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/util.js',
-    ],
-  },
+  // @ffmpeg/util 不在 CDN 上，直接使用内置实现（见 loadLibsWithFallback）
 ];
 
 const CDN_CORE_LIST = [
@@ -82,31 +76,13 @@ async function loadLibsWithFallback() {
   }
   FFmpeg = window.FFmpegWASM.FFmpeg;
 
-  // --- 2. 加载 @ffmpeg/util（可选，CDN 失败时使用内置实现）---
-  if (typeof window.FFmpegUtil === 'undefined') {
-    let loaded = false;
-    for (const url of CDN_LIBS[1].urls) {
-      try {
-        log(`加载 FFmpegUtil（${new URL(url).hostname}）…`, 'info');
-        await loadScript(url);
-        if (typeof window.FFmpegUtil !== 'undefined') {
-          log('FFmpegUtil 加载成功 ✓', 'info');
-          loaded = true;
-          break;
-        }
-      } catch (e) {
-        log('FFmpegUtil CDN 不可用，切换备用源…', 'warn');
-      }
-    }
-    if (!loaded) {
-      log('FFmpegUtil 所有 CDN 不可用，启用内置实现 ✓', 'warn');
-    }
-  }
-
+  // --- 2. @ffmpeg/util 使用内置实现（CDN 上无此包，避免无效请求）---
   if (typeof window.FFmpegUtil !== 'undefined') {
     fetchFile = window.FFmpegUtil.fetchFile;
     toBlobURL = window.FFmpegUtil.toBlobURL;
+    log('FFmpegUtil 已就绪（外部） ✓', 'info');
   } else {
+    log('使用内置 fetchFile / toBlobURL 实现 ✓', 'info');
     // 内置实现：功能等价于 @ffmpeg/util
     fetchFile = async (input) => {
       if (typeof input === 'string') {

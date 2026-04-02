@@ -452,7 +452,8 @@ async function fetchFromUrl(rawUrl) {
 // ================================================================
 // HLS / m3u8 下载器
 // FFmpeg.wasm 无法访问 https:// 协议，此函数在浏览器层
-// 下载所有 TS 分片并写入 FFmpeg 虚拟 FS，再由 FFmpeg 合并。
+// 下载所有 TS 分片并在 JS 中直接字节拼接（TS 格式天然支持），
+// 写入单个合并文件后由 FFmpeg 重封装为 MP4。
 // ================================================================
 
 async function runHlsDownload(m3u8Url) {
@@ -486,57 +487,64 @@ async function runHlsDownload(m3u8Url) {
   if (segments.length === 0) throw new Error('HLS 清单中未找到媒体分片');
   log(`共 ${segments.length} 个分片，开始下载…`, 'info');
 
-  // --- 4. 逐片下载并写入 FFmpeg FS ---
-  // 使用绝对路径 /hlsseg00000.ts，确保 concat demuxer 和 writeFile 使用同一路径
-  const localNames = [];
+  // --- 4. 逐片下载到内存（JS 字节数组）---
+  // 不逐片写入 FFmpeg FS，在浏览器 JS 中直接拼接字节，
+  // 避免 concat demuxer 的路径解析问题。
+  const chunks = [];
+  let totalBytes = 0;
   let failed = 0;
   for (let i = 0; i < segments.length; i++) {
-    const segName = `/hlsseg${String(i).padStart(5, '0')}.ts`;
-    setProgress(Math.round((i / segments.length) * 75), `下载分片 ${i + 1} / ${segments.length}…`);
+    setProgress(Math.round((i / segments.length) * 70), `下载分片 ${i + 1} / ${segments.length}…`);
     try {
       const resp = await fetch(segments[i]);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = new Uint8Array(await resp.arrayBuffer());
-      await ffmpeg.writeFile(segName, data);
-      localNames.push(segName);
+      chunks.push(data);
+      totalBytes += data.length;
     } catch (e) {
       log(`分片 ${i + 1} 失败（${e.message}），跳过`, 'warn');
       failed++;
     }
   }
 
-  if (localNames.length === 0) throw new Error('所有分片均下载失败，请检查链接是否有效或已过期');
-  if (failed > 0) log(`${failed} 个分片跳过，合并剩余 ${localNames.length} 片`, 'warn');
+  if (chunks.length === 0) throw new Error('所有分片均下载失败，请检查链接是否有效或已过期');
+  if (failed > 0) log(`${failed} 个分片跳过，合并剩余 ${chunks.length} 片`, 'warn');
 
-  // --- 5. 使用 concat demuxer（绝对路径，避免 CWD 不一致问题）---
-  // concat 文件和分片均使用 /绝对路径，消除 concat demuxer 路径解析歧义
-  const concatList = localNames.map(n => `file '${n}'`).join('\n');
-  await ffmpeg.writeFile('/hlsconcat.txt', new TextEncoder().encode(concatList));
-  log(`concat 列表已写入（${localNames.length} 行）`, 'info');
+  // --- 5. 在 JS 中直接字节拼接 TS 流 ---
+  // MPEG-TS 分片可直接字节级拼接（HLS 协议设计如此）
+  setProgress(75, `拼接 ${chunks.length} 个分片（${formatSize(totalBytes)}）…`);
+  log(`在浏览器中拼接 ${chunks.length} 个分片，总大小 ${formatSize(totalBytes)}…`, 'info');
+  const combined = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.length;
+  }
 
-  // --- 6. FFmpeg 合并 ---
-  setProgress(80, `FFmpeg 合并 ${localNames.length} 个分片…`);
-  log('正在合并（-f concat）…', 'info');
+  // --- 6. 写入单个合并 TS 文件并由 FFmpeg 重封装 ---
+  setProgress(80, '写入 FFmpeg 虚拟文件系统…');
+  await ffmpeg.writeFile('hls_input.ts', combined);
+  log('开始 FFmpeg 重封装（TS → MP4）…', 'info');
+
+  setProgress(85, 'FFmpeg 重封装中…');
   const exitCode = await ffmpeg.exec([
-    '-f', 'concat',
-    '-safe', '0',
-    '-i', '/hlsconcat.txt',
+    '-i', 'hls_input.ts',
     '-c', 'copy',
-    '-y', '/hlsout.mp4'
+    '-y', 'hls_output.mp4'
   ]);
 
   if (exitCode !== 0) {
-    throw new Error(`FFmpeg 合并失败（退出码：${exitCode}）。请查看上方日志获取详情。`);
+    throw new Error(`FFmpeg 重封装失败（退出码：${exitCode}）。请查看上方日志获取详情。`);
   }
 
   setProgress(95, '生成下载链接…');
   log('读取输出文件…', 'info');
-  await downloadResult('/hlsout.mp4', `hls_${Date.now()}.mp4`);
+  await downloadResult('hls_output.mp4', `hls_${Date.now()}.mp4`);
   setProgress(100, '完成');
   toast('HLS 下载完成！', 'success');
 
   // 清理 FS
-  await cleanupFiles(['/hlsconcat.txt', '/hlsout.mp4', ...localNames]);
+  await cleanupFiles(['hls_input.ts', 'hls_output.mp4']);
 }
 
 async function fetchText(url, label) {

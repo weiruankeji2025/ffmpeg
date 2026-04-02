@@ -458,23 +458,31 @@ async function runHlsDownload(m3u8Url) {
     }
   }
 
-  // --- 3. 解析分片列表 ---
-  const segments = parseSegments(playlistText, playlistUrl);
+  // --- 3. 解析分片列表（含加密信息）---
+  const segments = parsePlaylist(playlistText, playlistUrl);
   if (segments.length === 0) throw new Error('HLS 清单中未找到媒体分片');
-  log(`共 ${segments.length} 个分片，开始下载…`, 'info');
 
-  // --- 4. 逐片下载到内存（JS 字节数组）---
-  // 不逐片写入 FFmpeg FS，在浏览器 JS 中直接拼接字节，
-  // 避免 concat demuxer 的路径解析问题。
+  const hasEnc = segments.some(s => s.key && s.key.method !== 'NONE');
+  log(`共 ${segments.length} 个分片，开始下载${hasEnc ? '（AES-128 加密，自动解密）' : ''}…`, 'info');
+
+  // --- 4. 逐片下载 + 解密 ---
+  const keyCache = new Map(); // URI → ArrayBuffer
   const chunks = [];
   let totalBytes = 0;
   let failed = 0;
+
   for (let i = 0; i < segments.length; i++) {
     setProgress(Math.round((i / segments.length) * 70), `下载分片 ${i + 1} / ${segments.length}…`);
     try {
-      const resp = await fetch(segments[i]);
+      const resp = await fetch(segments[i].url);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = new Uint8Array(await resp.arrayBuffer());
+      let data = new Uint8Array(await resp.arrayBuffer());
+
+      // 解密 AES-128-CBC（HLS 标准加密方式）
+      if (segments[i].key && segments[i].key.method === 'AES-128') {
+        data = await decryptHlsSegment(data, segments[i].key, keyCache);
+      }
+
       chunks.push(data);
       totalBytes += data.length;
     } catch (e) {
@@ -504,8 +512,10 @@ async function runHlsDownload(m3u8Url) {
 
   setProgress(85, 'FFmpeg 重封装中…');
   const exitCode = await ffmpeg.exec([
+    '-f', 'mpegts',          // 强制指定输入格式，避免自动探测失败
     '-i', 'hls_input.ts',
     '-c', 'copy',
+    '-bsf:a', 'aac_adtstoasc',  // 修正 AAC 封装（TS→MP4 必要）
     '-y', 'hls_output.mp4'
   ]);
 
@@ -533,11 +543,86 @@ function resolveHlsUrl(base, relative) {
   try { return new URL(relative, base).href; } catch { return relative; }
 }
 
-function parseSegments(text, baseUrl) {
-  return text.split('\n')
-    .map(l => l.trim())
-    .filter(l => l && !l.startsWith('#'))
-    .map(l => resolveHlsUrl(baseUrl, l));
+/**
+ * 解析 HLS 媒体播放列表，返回 { url, key } 对象数组。
+ * 跟踪 #EXT-X-KEY 标签以支持 AES-128 加密流。
+ */
+function parsePlaylist(text, baseUrl) {
+  const lines = text.split('\n').map(l => l.trim());
+  const segs = [];
+  let currentKey = null;
+  let seqNum = 0;
+
+  for (const line of lines) {
+    if (line.startsWith('#EXT-X-MEDIA-SEQUENCE:')) {
+      seqNum = parseInt(line.slice(22)) || 0;
+    }
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith('#EXT-X-KEY:')) {
+      currentKey = parseKeyTag(line, baseUrl);
+    } else if (line.startsWith('#EXTINF:') || (line && !line.startsWith('#'))) {
+      let uri;
+      if (line.startsWith('#EXTINF:')) {
+        uri = lines[i + 1]?.trim();
+        i++;
+      } else {
+        uri = line;
+      }
+      if (uri && !uri.startsWith('#')) {
+        segs.push({
+          url: resolveHlsUrl(baseUrl, uri),
+          key: currentKey ? { ...currentKey, seqNum } : null,
+        });
+        seqNum++;
+      }
+    }
+  }
+  return segs;
+}
+
+function parseKeyTag(line, baseUrl) {
+  const method = (line.match(/METHOD=([^,\s\r\n]+)/) || [])[1] || 'NONE';
+  if (method === 'NONE') return null;
+  const uriMatch = line.match(/URI="([^"]+)"/);
+  const uri = uriMatch ? resolveHlsUrl(baseUrl, uriMatch[1]) : null;
+  const ivHex = (line.match(/IV=0x([0-9a-fA-F]+)/i) || [])[1] || null;
+  return { method, uri, ivHex };
+}
+
+/**
+ * 使用 Web Crypto API 解密 AES-128-CBC 加密的 HLS 分片。
+ * IV 来源：#EXT-X-KEY 的 IV 属性，或分片序列号（HLS RFC 规定）。
+ */
+async function decryptHlsSegment(data, keyInfo, keyCache) {
+  if (!keyInfo.uri) throw new Error('AES-128 加密流缺少 KEY URI');
+
+  // 缓存 key（同一 URI 只 fetch 一次）
+  if (!keyCache.has(keyInfo.uri)) {
+    const resp = await fetch(keyInfo.uri);
+    if (!resp.ok) throw new Error(`密钥获取失败：HTTP ${resp.status}`);
+    keyCache.set(keyInfo.uri, await resp.arrayBuffer());
+  }
+  const keyData = keyCache.get(keyInfo.uri);
+
+  // 构造 IV：优先用标签中的 IV，否则用 16 字节大端序列号
+  let iv;
+  if (keyInfo.ivHex) {
+    const hex = keyInfo.ivHex.padStart(32, '0');
+    iv = new Uint8Array(hex.match(/.{2}/g).map(b => parseInt(b, 16)));
+  } else {
+    iv = new Uint8Array(16);
+    const n = keyInfo.seqNum;
+    for (let j = 0; j < 4; j++) iv[15 - j] = (n >> (j * 8)) & 0xff;
+  }
+
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw', keyData, { name: 'AES-CBC' }, false, ['decrypt']
+  );
+  const decrypted = await crypto.subtle.decrypt({ name: 'AES-CBC', iv }, cryptoKey, data);
+  return new Uint8Array(decrypted);
 }
 
 function pickBestVariant(masterText, baseUrl) {

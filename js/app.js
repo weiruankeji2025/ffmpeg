@@ -116,7 +116,59 @@ document.addEventListener('DOMContentLoaded', () => {
   initRunButtons();
   initRangeDisplays();
   loadFFmpeg();
+  initFromUrlParams();
 });
+
+// ================================================================
+// 油猴脚本跳转参数处理
+// 支持 ?url=<encoded_url>&autostart=1
+// 自动切换到 URL 标签页并填入链接，autostart=1 时自动触发下载
+// ================================================================
+
+function initFromUrlParams() {
+  const params = new URLSearchParams(window.location.search);
+  const rawUrl = params.get('url');
+  if (!rawUrl) return;
+
+  const url = decodeURIComponent(rawUrl);
+
+  // 切换到 URL 来源标签
+  switchSource('url');
+
+  // 填入 M3U8 / 视频链接
+  const urlInput = $('urlInput');
+  if (urlInput) {
+    urlInput.value = url;
+    urlInput.dispatchEvent(new Event('input'));
+  }
+
+  // autostart=1：等 FFmpeg 加载完毕后自动触发下载
+  if (params.get('autostart') === '1') {
+    waitForFfmpegThenFetch(url);
+  }
+}
+
+/**
+ * 轮询等待 FFmpeg 加载完成后再触发下载。
+ * 所有 URL 类型均需等待 isLoaded（HLS 最终需 FFmpeg 重封装），
+ * 最多等待 60 秒。
+ */
+function waitForFfmpegThenFetch(url) {
+  // HLS 最终也需要 FFmpeg 重封装（TS→MP4），必须等待 isLoaded
+  const maxWait = 60000;
+  const interval = 400;
+  let elapsed = 0;
+  const timer = setInterval(() => {
+    elapsed += interval;
+    if (isLoaded) {
+      clearInterval(timer);
+      fetchFromUrl(url);
+    } else if (elapsed >= maxWait) {
+      clearInterval(timer);
+      toast('FFmpeg 加载超时，请手动点击"获取文件"', 'error');
+    }
+  }, interval);
+}
 
 // ================================================================
 // NAVIGATION
@@ -149,27 +201,25 @@ function initNavigation() {
 // UPLOAD
 // ================================================================
 
-/**
- * 轮询等待 FFmpeg 加载完成后再触发下载。
- * 所有 URL 类型均需等待 isLoaded（HLS 最终需 FFmpeg 重封装），
- * 最多等待 60 秒。
- */
-function waitForFfmpegThenFetch(url) {
-  // HLS 最终也需要 FFmpeg 重封装（TS→MP4），必须等待 isLoaded
-  const maxWait = 60000;
-  const interval = 400;
-  let elapsed = 0;
-  const timer = setInterval(() => {
-    elapsed += interval;
-    if (isLoaded) {
-      clearInterval(timer);
-      fetchFromUrl(url);
-    } else if (elapsed >= maxWait) {
-      clearInterval(timer);
-      toast('FFmpeg 加载超时，请手动点击"获取文件"', 'error');
-    }
-  }, interval);
-}
+function initUpload() {
+  const zone = $('uploadZone');
+  const input = $('fileInput');
+  const uploadLink = $('uploadLink');
+  const changeFileBtn = $('changeFileBtn');
+  const changeFile2Btn = $('changeFile2Btn');
+
+  // Click on link → open file dialog
+  uploadLink.addEventListener('click', () => input.click());
+  changeFileBtn.addEventListener('click', () => input.click());
+  changeFile2Btn.addEventListener('click', () => {
+    const input2 = document.createElement('input');
+    input2.type = 'file';
+    input2.accept = 'video/*,audio/*';
+    input2.onchange = (e) => {
+      if (e.target.files[0]) setFile2(e.target.files[0]);
+    };
+    input2.click();
+  });
 
   // File input change
   input.addEventListener('change', (e) => {
@@ -1505,4 +1555,3 @@ function hideLoadingOverlay() {
   overlay?.remove();
   overlay = null;
 }
-
